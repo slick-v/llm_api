@@ -1,8 +1,9 @@
+import boto3
 from groq import Groq
 
 from app.config import settings
 
-client = Groq(api_key=settings.groq_api_key)
+# client = Groq(api_key=settings.groq_api_key)
 
 SYSTEM_PROMPTS = {
     "assistant": "You are a helpful, friendly assistant.",
@@ -13,39 +14,110 @@ SYSTEM_PROMPTS = {
 
 MAX_HISTORY = 10  # NEW: only send the last 10 messages
 
-def build_messages(messages: list[dict], mode:str) ->list[dict]:
-    trimmed = messages[-MAX_HISTORY:]
+# client
+if settings.llm_provider == "bedrock":
+    bedrock = boto3.client("bedrock-runtime",region_name=settings.aws_region)
+else:
+    groq_client= Groq(api_key=settings.groq_api_key)
 
-    while trimmed and trimmed[0]["role"] != "user":
+
+
+def trim_history(messages: list[dict]) -> list[dict]:
+    trimmed = messages[-MAX_HISTORY]
+    while trimmed and trimmed[0]["role"] != ["user"]:
         trimmed = trimmed[1:]
-    system = {"role": "system", "content": SYSTEM_PROMPTS[mode]}
-    return [system] + trimmed
-
-    # pass
+    return trimmed
 
 def get_reply(messages: list[dict], mode:str = "assistant") -> tuple[str, int]:
-    """Send the chat history to groq and return (reply, tokens_used)"""
-    # full_message = [{"role":"system", "content": SYSTEM_PROMPTS}] + messages
 
-    response =client.chat.completions.create(
-        model= settings.model_name,
-        messages=build_messages(messages,mode),
-        max_tokens=settings.max_tokens,
+    if settings.llm_provider == "bedrock":
+        return _bedrock_reply(messages, mode)
+    return _groq_reply(messages, mode)
+
+def stream_reply(messages: list[dict] , mode: str ="assistant") :
+    if settings.llm_provider == "bedrock":
+        yield from _bedrock_strem(messages, mode)
+    else:
+        yield from _groq_stream(messages, mode)
+
+
+# bedrock
+def _bedrock_messages(messages: list[dict]) -> list[dict]:
+    return [
+        {"role": m["role"], "content": [{"text": m["content"]}]}
+        for m in trim_history(messages)
+    ]
+
+
+
+def _bedrock_reply(messages, mode):
+    response = bedrock.converse(
+        modelId=settings.bedrock_model_id,
+        system=[{ "text": SYSTEM_PROMPTS[mode]}],
+
+        messages=_bedrock_messages(messages),
+        inferenceConfig={"maxTokens": settings.max_tokens},
     )
-
-    reply = response.choices[0].message.content
-    tokens_used = response.usage.total_tokens
+    reply =response["output"]["message"]["content"][0]["text"]
+    tokens_used = response["usage"]["totaltokens"]
     return reply, tokens_used
 
-
-def stream_reply(messages: list[dict], mode:str = "assistant"):
-    stream = client.chat.completions.create(
-        model= settings.model_name,
-        messages=build_messages(messages, mode),
-        max_tokens=settings.max_tokens,
-        stream=True,
+def _bedrock_stream(messages, mode):
+    response = bedrock.converse_stream(
+        modelId=settings.bedrock_model_id,
+        system=[{"text": SYSTEM_PROMPTS[mode]}],
+        messages=_bedrock_messages(messages),
+        inferenceConfig={"maxTokens": settings.max_tokens},
     )
+    for event in response["stream"]:
+        if "contentBlockDelta" in event:
+            text = event["contentBlockDelta"]["delta"].get("text")
+        if text:
+            yield text
 
-    for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+
+
+
+
+
+
+
+
+
+
+# def build_messages(messages: list[dict], mode:str) ->list[dict]:
+#     trimmed = messages[-MAX_HISTORY:]
+
+#     while trimmed and trimmed[0]["role"] != "user":
+#         trimmed = trimmed[1:]
+#     system = {"role": "system", "content": SYSTEM_PROMPTS[mode]}
+#     return [system] + trimmed
+
+#     # pass
+
+# def get_reply(messages: list[dict], mode:str = "assistant") -> tuple[str, int]:
+#     """Send the chat history to groq and return (reply, tokens_used)"""
+#     # full_message = [{"role":"system", "content": SYSTEM_PROMPTS}] + messages
+
+#     response =client.chat.completions.create(
+#         model= settings.model_name,
+#         messages=build_messages(messages,mode),
+#         max_tokens=settings.max_tokens,
+#     )
+
+#     reply = response.choices[0].message.content
+#     tokens_used = response.usage.total_tokens
+#     return reply, tokens_used
+
+
+# def stream_reply(messages: list[dict], mode:str = "assistant"):
+#     stream = client.chat.completions.create(
+#         model= settings.model_name,
+#         messages=build_messages(messages, mode),
+#         max_tokens=settings.max_tokens,
+#         stream=True,
+#     )
+
+#     for chunk in stream:
+#         if chunk.choices and chunk.choices[0].delta.content:
+#             yield chunk.choices[0].delta.content
