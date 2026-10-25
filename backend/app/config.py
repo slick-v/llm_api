@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60*24 #1day
 
+    # OBSERVABILITY
+    app_env: str = "local"   # set APP_ENV=production on the server
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    langfuse_log_content: bool = True  # False = send only numbers, not the chat text
+    sentry_dsn: str | None = None
+
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
 

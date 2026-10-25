@@ -114,10 +114,20 @@ export async function fetchMe() {
  * Throws AuthError when the login has expired, BackendError for other errors
  * the user should see; when stopped through `signal`, throws the abort reason.
  */
-export async function streamChat({ messages, mode, signal, onChunk }) {
+export async function streamChat({
+  messages,
+  mode,
+  conversationId,
+  signal,
+  onChunk,
+}) {
   const response = await request("/chat/stream", {
     method: "POST",
-    body: { messages: messages.slice(-HISTORY_TO_SEND), mode },
+    body: {
+      messages: messages.slice(-HISTORY_TO_SEND),
+      mode,
+      conversation_id: conversationId, // the backend's field name
+    },
     signal,
     invalidMessage:
       "That message is too long or empty. Please shorten it and try again.",

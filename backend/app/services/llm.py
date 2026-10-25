@@ -1,7 +1,11 @@
+from datetime import datetime, timezone
+
 import boto3
 from groq import Groq
+from langfuse import propagate_attributes
 
 from app.config import settings
+from app.observability import langfuse
 
 SYSTEM_PROMPTS = {
     "assistant": "You are a helpful, friendly assistant.",
@@ -20,26 +24,87 @@ else:
 
 
 def trim_history(messages: list[dict]) -> list[dict]:
-    trimmed = messages[-MAX_HISTORY:]                    # fix 1
-    while trimmed and trimmed[0]["role"] != "user":      # fix 2
+    trimmed = messages[-MAX_HISTORY:]
+    while trimmed and trimmed[0]["role"] != "user":
         trimmed = trimmed[1:]
     return trimmed
 
 
-def get_reply(messages: list[dict], mode: str = "assistant") -> tuple[str, int]:
-    if settings.llm_provider == "bedrock":
-        return _bedrock_reply(messages, mode)
-    return _groq_reply(messages, mode)
+# ---------- public functions (routes call these) ----------
+
+def get_reply(messages: list[dict], mode: str = "assistant", user_id=None, session_id=None) -> tuple[str, int]:
+    """Send the chat history to the LLM and return (reply, tokens_used)."""
+    generation = _start_generation("llm-reply", messages, mode, user_id, session_id)
+    try:
+        if settings.llm_provider == "bedrock":
+            reply, usage = _bedrock_reply(messages, mode)
+        else:
+            reply, usage = _groq_reply(messages, mode)
+    except Exception as e:
+        generation.update(level="ERROR", status_message=str(e))
+        generation.end()
+        raise
+
+    generation.update(output=_logged(reply), usage_details=usage)
+    generation.end()
+    return reply, usage["input"] + usage["output"]
 
 
-def stream_reply(messages: list[dict], mode: str = "assistant"):
-    if settings.llm_provider == "bedrock":
-        yield from _bedrock_stream(messages, mode)       # fix 3
-    else:
-        yield from _groq_stream(messages, mode)
+def stream_reply(messages: list[dict], mode: str = "assistant", user_id=None, session_id=None):
+    generation = _start_generation("llm-stream", messages, mode, user_id, session_id)
+    provider_stream = _bedrock_stream if settings.llm_provider == "bedrock" else _groq_stream
+    usage: dict = {}  # filled in by the provider when the stream ends
+    parts: list[str] = []
+    try:
+        for text in provider_stream(messages, mode, usage):
+            if not parts:
+                # time to first token: with streaming, this is the wait users feel
+                generation.update(completion_start_time=datetime.now(timezone.utc))
+            parts.append(text)
+            yield text
+    except Exception as e:
+        generation.update(level="ERROR", status_message=str(e))
+        raise
+    finally:
+        # also runs when the user presses Stop or closes the page
+        generation.update(output=_logged("".join(parts)), usage_details=usage or None)
+        generation.end()
 
 
-# groq                                                  # fix 6
+# ---------- langfuse ----------
+
+def _model_name() -> str:
+    return settings.bedrock_model_id if settings.llm_provider == "bedrock" else settings.model_name
+
+
+def _logged(content):
+    # with LANGFUSE_LOG_CONTENT=false only numbers (tokens, timing, errors) reach Langfuse
+    return content if settings.langfuse_log_content else None
+
+
+def _start_generation(name: str, messages: list[dict], mode: str, user_id, session_id):
+    """Start a Langfuse record of one LLM call, tagged with who asked and in which mode."""
+    # attributes set here are copied onto the observation created inside the block
+    with propagate_attributes(
+        user_id=str(user_id) if user_id is not None else None,
+        session_id=session_id,
+        tags=[mode, settings.llm_provider],
+        trace_name="chat",
+    ):
+        # start_observation (not start_as_current_observation): a streamed reply
+        # continues in another thread, where a "current" context would break
+        return langfuse.start_observation(
+            name=name,
+            as_type="generation",
+            model=_model_name(),
+            model_parameters={"max_tokens": settings.max_tokens},
+            input=_logged([{"role": "system", "content": SYSTEM_PROMPTS[mode]}] + trim_history(messages)),
+            metadata={"mode": mode, "provider": settings.llm_provider},
+        )
+
+
+# ---------- groq ----------
+
 def _groq_messages(messages: list[dict], mode: str) -> list[dict]:
     system = {"role": "system", "content": SYSTEM_PROMPTS[mode]}
     return [system] + trim_history(messages)
@@ -51,10 +116,11 @@ def _groq_reply(messages, mode):
         messages=_groq_messages(messages, mode),
         max_tokens=settings.max_tokens,
     )
-    return response.choices[0].message.content, response.usage.total_tokens
+    usage = {"input": response.usage.prompt_tokens, "output": response.usage.completion_tokens}
+    return response.choices[0].message.content, usage
 
 
-def _groq_stream(messages, mode):
+def _groq_stream(messages, mode, usage: dict):
     stream = groq_client.chat.completions.create(
         model=settings.model_name,
         messages=_groq_messages(messages, mode),
@@ -64,9 +130,13 @@ def _groq_stream(messages, mode):
     for chunk in stream:
         if chunk.choices and chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
+        # Groq puts the token counts on the last chunk
+        if chunk.x_groq is not None and chunk.x_groq.usage is not None:
+            usage.update(input=chunk.x_groq.usage.prompt_tokens, output=chunk.x_groq.usage.completion_tokens)
 
 
-# bedrock
+# ---------- bedrock (Converse API works the same for every Bedrock model) ----------
+
 def _bedrock_messages(messages: list[dict]) -> list[dict]:
     return [
         {"role": m["role"], "content": [{"text": m["content"]}]}
@@ -82,11 +152,11 @@ def _bedrock_reply(messages, mode):
         inferenceConfig={"maxTokens": settings.max_tokens},
     )
     reply = response["output"]["message"]["content"][0]["text"]
-    tokens_used = response["usage"]["totalTokens"]       # fix 4
-    return reply, tokens_used
+    tokens = response["usage"]
+    return reply, {"input": tokens["inputTokens"], "output": tokens["outputTokens"]}
 
 
-def _bedrock_stream(messages, mode):
+def _bedrock_stream(messages, mode, usage: dict):
     response = bedrock.converse_stream(
         modelId=settings.bedrock_model_id,
         system=[{"text": SYSTEM_PROMPTS[mode]}],
@@ -96,9 +166,12 @@ def _bedrock_stream(messages, mode):
     for event in response["stream"]:
         if "contentBlockDelta" in event:
             text = event["contentBlockDelta"]["delta"].get("text")
-            if text:                                     # fix 5: inside the if
+            if text:
                 yield text
-
+        elif "metadata" in event:
+            # Bedrock sends the token counts in a last "metadata" event
+            tokens = event["metadata"]["usage"]
+            usage.update(input=tokens["inputTokens"], output=tokens["outputTokens"])
 
 
 

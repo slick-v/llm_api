@@ -13,7 +13,7 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[Message] =Field(min_length=1, max_length=MAX_MESSAGES)
-    conversation_id: str | None = None
+    conversation_id: str | None = Field(default=None, max_length=64)
     mode: Literal["assistant", "tutor", "coder", "interviewer"] = "assistant"
 
 

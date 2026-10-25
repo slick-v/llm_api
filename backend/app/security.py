@@ -6,6 +6,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials,HTTPBearer
 from pwdlib import PasswordHash
 from sqlalchemy.orm import Session
+import sentry_sdk
 
 from app.config import settings
 from app.db import get_db
@@ -59,4 +60,6 @@ def get_current_user(
     user = db.get(User, user_id)
     if user is None:
         raise unauthorized
+    
+    sentry_sdk.set_user({"id": str(user.id)})  # id only, never the email
     return user

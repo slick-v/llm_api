@@ -40,7 +40,7 @@ def chat(request: ChatRequest, user: User = Depends(get_current_user)):
     check_limits(str(user.id))
     messages = [m.model_dump() for m in request.messages]
     try:
-        reply, tokens_used = get_reply(messages, request.mode)
+        reply, tokens_used = get_reply(messages, request.mode, user_id=user.id, session_id=request.conversation_id)
     except Exception:
         logger.exception("LLM call failed for user %s", user.id)
         raise HTTPException(status_code=502, detail=LLM_ERROR)
@@ -59,7 +59,7 @@ def chat_stream(request: ChatRequest,  user: User = Depends(get_current_user)):
 
     # pull the first chunk now so errors like bad credentials or model name
     # come back as a 502 instead of a 200 with the error in the body
-    chunks = stream_reply(messages, request.mode)
+    chunks = stream_reply(messages, request.mode, user_id=user_id, session_id=request.conversation_id)
     try:
         first = next(chunks, "")
     except Exception:

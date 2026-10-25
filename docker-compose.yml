@@ -1,3 +1,12 @@
+# every container keeps at most 3 log files of 10 MB
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+
+
 services:
   db:
     # Postgres with the pgvector extension included (for the vector DB later)
@@ -18,6 +27,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    logging: *default-logging
   backend:
     build: ./backend
     env_file: .env
@@ -27,6 +37,7 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
     # no "ports:" on purpose: the API is only reachable from the frontend
     # over the internal Docker network, never from the internet
     healthcheck:
@@ -43,6 +54,7 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
 
   # old Streamlit UI, still available at /streamlit/
   frontend:
@@ -54,6 +66,7 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
 
   caddy:
     image: caddy:2.10
@@ -72,6 +85,7 @@ services:
       - web
       - frontend
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   caddy_data:

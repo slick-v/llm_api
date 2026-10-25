@@ -13,6 +13,13 @@ const CLEARED = "cleared";
 // each user's chat is saved separately in this browser, so a refresh doesn't lose it
 export const chatStorageKey = (userId) => `llm-chat-state-${userId}`;
 
+
+// one id per conversation, so Langfuse can group its messages into a session
+function newConversationId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
 function loadState(storageKey) {
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey));
@@ -21,9 +28,9 @@ function loadState(storageKey) {
     const messages = (saved?.messages ?? []).filter((m) => m?.content);
     if (messages.at(-1)?.role === "user") messages.pop();
     const mode = MODES[saved?.mode] ? saved.mode : DEFAULT_MODE;
-    return { messages, mode };
+    return { messages, mode, conversationId: saved?.conversationId || newConversationId() };
   } catch {
-    return { messages: [], mode: DEFAULT_MODE };
+    return { messages: [], mode: DEFAULT_MODE, conversationId: newConversationId() };
   }
 }
 
@@ -32,6 +39,7 @@ export default function ChatPage({ user, onLogout }) {
   const [initial] = useState(() => loadState(storageKey));
   const [messages, setMessages] = useState(initial.messages);
   const [mode, setMode] = useState(initial.mode);
+  const [conversationId, setConversationId] = useState(initial.conversationId);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState("");
@@ -41,11 +49,11 @@ export default function ChatPage({ user, onLogout }) {
 
   useEffect(() => {
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ messages, mode }));
+      localStorage.setItem(storageKey, JSON.stringify({ messages, mode, conversationId }));
     } catch {
       // private mode or storage full: the chat just won't survive a refresh
     }
-  }, [storageKey, messages, mode]);
+  }, [storageKey, messages, mode, conversationId]);
 
   useEffect(() => {
     let active = true;
@@ -84,6 +92,7 @@ export default function ChatPage({ user, onLogout }) {
       await streamChat({
         messages: history,
         mode,
+        conversationId,
         signal: controller.signal,
         onChunk: (chunk) => {
           received += chunk;
@@ -120,6 +129,7 @@ export default function ChatPage({ user, onLogout }) {
   function clearChat() {
     stop(CLEARED);
     setMessages([]);
+    setConversationId(newConversationId());
     setError("");
     setSidebarOpen(false);
   }
