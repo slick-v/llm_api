@@ -1,19 +1,47 @@
-from fastapi import APIRouter, HTTPException
+import logging
+
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.config import settings
+from app.rate_limit import RateLimiter
 from app.schemas import ChatRequest, ChatResponse
 from app.services.llm import get_reply, stream_reply
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+user_limiter = RateLimiter(settings.user_limit_per_minute, 60)
+global_minute_limiter = RateLimiter(settings.global_limit_per_minute, 60)
+global_day_limiter = RateLimiter(settings.global_limit_per_day, 24 * 60 * 60)
+
+# what users see; the real error only goes to the server logs
+LLM_ERROR = "The AI service isn't available right now. Please try again in a moment."
+
+
+def check_limits(user_id: str):
+    if not user_limiter.allow(user_id):
+        raise HTTPException(
+            status_code=429,
+            detail="You're sending messages too fast. Wait a minute and try again.",
+        )
+    if not global_minute_limiter.allow("all") or not global_day_limiter.allow("all"):
+        logger.warning("Global rate limit reached")
+        raise HTTPException(
+            status_code=429,
+            detail="The app is busy right now. Please try again later.",
+        )
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, x_user_id: str = Header(default="anonymous")):
+    check_limits(x_user_id)
     messages = [m.model_dump() for m in request.messages]
     try:
         reply, tokens_used = get_reply(messages, request.mode)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+    except Exception:
+        logger.exception("LLM call failed for user %s", x_user_id)
+        raise HTTPException(status_code=502, detail=LLM_ERROR)
     return ChatResponse(
         reply=reply,
         tokens_used=tokens_used,
@@ -21,24 +49,26 @@ def chat(request: ChatRequest):
     )
 
 
-@router.post("/chat/stream")  # NEW
-def chat_stream(request: ChatRequest):
+@router.post("/chat/stream")
+def chat_stream(request: ChatRequest, x_user_id: str = Header(default="anonymous")):
+    check_limits(x_user_id)
     messages = [m.model_dump() for m in request.messages]
 
-    # pull the first chunk now so errors like a bad API key or model name
+    # pull the first chunk now so errors like bad credentials or model name
     # come back as a 502 instead of a 200 with the error in the body
     chunks = stream_reply(messages, request.mode)
     try:
         first = next(chunks, "")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+    except Exception:
+        logger.exception("LLM stream failed for user %s", x_user_id)
+        raise HTTPException(status_code=502, detail=LLM_ERROR)
 
     def generate():
         yield first
         try:
             yield from chunks
-        except Exception as e:
-            yield f"\n\n[Error: {e}]"
+        except Exception:
+            logger.exception("LLM stream broke mid-reply for user %s", x_user_id)
+            yield "\n\n[The reply was cut off. Please try again.]"
 
     return StreamingResponse(generate(), media_type="text/plain; charset=utf-8")
-
