@@ -12,10 +12,20 @@ services:
       retries: 3
       start_period: 10s
 
+  # React UI, served at / (nginx inside also forwards /api/* to the backend)
+  web:
+    build: ./web
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # old Streamlit UI, still available at /streamlit/
   frontend:
     build: ./frontend
     environment:
       API_URL: http://backend:8000
+      BASE_URL_PATH: streamlit
     depends_on:
       backend:
         condition: service_healthy
@@ -35,6 +45,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
+      - web
       - frontend
     restart: unless-stopped
 

@@ -1,22 +1,34 @@
 # LLM Chat
 
-A chat app with a FastAPI backend that talks to Groq and a Streamlit frontend.
+A chat app with a FastAPI backend that talks to Groq or AWS Bedrock, a React
+frontend (`web/`) and the original Streamlit frontend (`frontend/`).
 
 ```
-browser ──> frontend (Streamlit) ──> backend (FastAPI) ──> Groq API
+browser ──> web (React)            ──/api/*──> backend (FastAPI) ──> Bedrock / Groq
+browser ──> frontend (Streamlit)   ──────────> backend
 ```
 
 ## Run locally
 
 ```bash
 pip install -r backend/requirements.txt -r frontend/requirements.txt
-cp .env.example .env   # then put your Groq key in .env
+cp .env.example .env   # then fill in .env
 
 cd backend && uvicorn app.main:app --reload       # http://localhost:8000
-streamlit run frontend/app.py                     # http://localhost:8501
 ```
 
-Or with Docker: `docker compose up --build`, then open http://localhost.
+Then start either UI (or both):
+
+```bash
+cd web && npm install && npm run dev              # React:     http://localhost:5173
+streamlit run frontend/app.py                     # Streamlit: http://localhost:8501
+```
+
+The React dev server forwards `/api/*` to `http://localhost:8000` (set
+`API_URL` to point it elsewhere), so the backend needs no CORS setup.
+
+Or with Docker: `docker compose up --build`, then open http://localhost for the
+React UI and http://localhost/streamlit/ for Streamlit.
 
 ## Deploy to Railway
 
@@ -56,12 +68,14 @@ redeploys on every push to the branch it watches (set under **Settings → Sourc
 
 ## Deploy to AWS EC2
 
-One small Linux server runs all three containers with `docker compose`.
+One small Linux server runs all the containers with `docker compose`.
 Caddy is the only container open to the internet; it serves HTTPS and passes
-requests to Streamlit, which talks to the backend over Docker's private network.
+requests to the React UI (nginx) or, under `/streamlit/`, to Streamlit. Both
+talk to the backend over Docker's private network.
 
 ```
-internet ──443──> caddy ──> frontend:8501 ──> backend:8000 ──> Groq
+internet ──443──> caddy ──/──────────> web:80 (nginx) ──/api/*──> backend:8000 ──> Bedrock / Groq
+                        └─/streamlit/─> frontend:8501 ───────────> backend:8000
 ```
 
 ### 1. Protect your credits
@@ -143,8 +157,9 @@ docker compose up -d --build
 docker compose ps
 ```
 
-All three containers should show `running` (the backend also `healthy`).
-Open `https://<your-ip-with-dashes>.sslip.io` in a browser.
+All four containers should show `running` (the backend also `healthy`).
+Open `https://<your-ip-with-dashes>.sslip.io` for the React UI, or add
+`/streamlit/` for the Streamlit one.
 
 ### Updating and troubleshooting
 
