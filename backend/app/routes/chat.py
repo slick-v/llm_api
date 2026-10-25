@@ -1,12 +1,14 @@
 import logging
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.config import settings
 from app.rate_limit import RateLimiter
 from app.schemas import ChatRequest, ChatResponse
 from app.services.llm import get_reply, stream_reply
+from app.models import User
+from app.security import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -34,13 +36,13 @@ def check_limits(user_id: str):
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest, x_user_id: str = Header(default="anonymous")):
-    check_limits(x_user_id)
+def chat(request: ChatRequest, user: User = Depends(get_current_user)):
+    check_limits(str(user.id))
     messages = [m.model_dump() for m in request.messages]
     try:
         reply, tokens_used = get_reply(messages, request.mode)
     except Exception:
-        logger.exception("LLM call failed for user %s", x_user_id)
+        logger.exception("LLM call failed for user %s", user.id)
         raise HTTPException(status_code=502, detail=LLM_ERROR)
     return ChatResponse(
         reply=reply,
@@ -50,8 +52,9 @@ def chat(request: ChatRequest, x_user_id: str = Header(default="anonymous")):
 
 
 @router.post("/chat/stream")
-def chat_stream(request: ChatRequest, x_user_id: str = Header(default="anonymous")):
-    check_limits(x_user_id)
+def chat_stream(request: ChatRequest,  user: User = Depends(get_current_user)):
+    check_limits(str(user.id))
+    user_id = user.id  # plain value for the generator below, which runs after the request
     messages = [m.model_dump() for m in request.messages]
 
     # pull the first chunk now so errors like bad credentials or model name
@@ -60,7 +63,7 @@ def chat_stream(request: ChatRequest, x_user_id: str = Header(default="anonymous
     try:
         first = next(chunks, "")
     except Exception:
-        logger.exception("LLM stream failed for user %s", x_user_id)
+        logger.exception("LLM stream failed for user %s", user_id)
         raise HTTPException(status_code=502, detail=LLM_ERROR)
 
     def generate():
@@ -68,7 +71,7 @@ def chat_stream(request: ChatRequest, x_user_id: str = Header(default="anonymous
         try:
             yield from chunks
         except Exception:
-            logger.exception("LLM stream broke mid-reply for user %s", x_user_id)
+            logger.exception("LLM stream broke mid-reply for user %s", user_id)
             yield "\n\n[The reply was cut off. Please try again.]"
 
     return StreamingResponse(generate(), media_type="text/plain; charset=utf-8")

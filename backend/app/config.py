@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     global_limit_per_minute: int = 30
     global_limit_per_day: int = 1000
 
+    # DATABASE
+    database_url: str = "postgresql+psycopg://llm:llm@localhost:5432/llm_chat"
+
+    # AUTH
+    jwt_secret: str #required app wont start without it 
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60*24 #1day
+
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
 

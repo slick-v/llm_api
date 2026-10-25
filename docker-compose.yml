@@ -1,7 +1,31 @@
 services:
+  db:
+    # Postgres with the pgvector extension included (for the vector DB later)
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-llm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-llm_chat}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # 127.0.0.1 = reachable from this machine only, never from the internet;
+    # set POSTGRES_PORT if 5432 is taken (e.g. by a locally installed Postgres)
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
   backend:
     build: ./backend
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-llm}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-llm_chat}
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
     # no "ports:" on purpose: the API is only reachable from the frontend
     # over the internal Docker network, never from the internet
@@ -52,3 +76,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  pgdata:

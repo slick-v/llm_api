@@ -1,12 +1,12 @@
 import { MODES } from "../modes.js";
-import { CloseIcon, TrashIcon } from "./Icons.jsx";
+import { CloseIcon, LogoutIcon, TrashIcon } from "./Icons.jsx";
 
 function statusText(online) {
   if (online === null) return "Checking server…";
   return online ? "Server online" : "Server offline";
 }
 
-export default function Sidebar({ open, onClose, mode, onModeChange, messageCount, onClear, online }) {
+export default function Sidebar({ open, onClose, mode, onModeChange, messageCount, onClear, online, user, onLogout }) {
   return (
     <>
       <div className={`scrim ${open ? "show" : ""}`} onClick={onClose} aria-hidden="true" />
@@ -38,6 +38,17 @@ export default function Sidebar({ open, onClose, mode, onModeChange, messageCoun
         </nav>
 
         <div className="sidebar-footer">
+          <div className="user-box">
+            <span className="user-avatar" aria-hidden="true">
+              {user.email[0].toUpperCase()}
+            </span>
+            <span className="user-email" title={user.email}>
+              {user.email}
+            </span>
+            <button className="icon-btn" onClick={onLogout} aria-label="Log out" title="Log out">
+              <LogoutIcon />
+            </button>
+          </div>
           <div className="stat">
             <span className="muted">Messages</span>
             <strong>{messageCount}</strong>

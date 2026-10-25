@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel,Field
+from pydantic import BaseModel,Field,ConfigDict,EmailStr
 
 
 MAX_MESSAGE_CHARS = 8000
@@ -21,3 +21,25 @@ class ChatResponse(BaseModel):
     reply:str
     tokens_used: int
     conversation_id: str | None = None
+
+
+# USER
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+# TOKEN
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut

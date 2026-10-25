@@ -1,10 +1,11 @@
 {$DOMAIN} {
 	encode gzip
 
-	# old Streamlit UI (it is started with --server.baseUrlPath=streamlit)
-	handle /streamlit* {
-		reverse_proxy frontend:8501
-	}
+	# the Streamlit UI (frontend:8501) has no login, so it is not exposed;
+	# to bring it back at /streamlit/, add:
+	#   handle /streamlit* {
+	#       reverse_proxy frontend:8501
+	#   }
 
 	# React UI; flush right away so streamed replies aren't held back
 	handle {
